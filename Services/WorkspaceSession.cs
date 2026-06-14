@@ -17,6 +17,7 @@ public class WorkspaceSession
     public OpenCodeClient Client { get; set; } = null!;
     public WorkspaceController Controller { get; set; } = null!;
     public Dictionary<string, string> PartTypes { get; } = new();
+    public List<ChatMessage> ConversationHistory { get; } = new();
     
     public string StatusText { get; set; } = "Ready";
     public Color StatusColor { get; set; } = Theme.Success;

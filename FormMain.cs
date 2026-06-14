@@ -65,6 +65,16 @@ public partial class FormMain : Form
 
         session.WvChat.CoreWebView2.Navigate(new Uri(htmlPath).AbsoluteUri);
         session.WvChat.WebMessageReceived += (s, e) => WvChat_SessionWebMessageReceived(session, e);
+
+        // Restore conversation history once page is fully navigated
+        session.WvChat.NavigationCompleted += (s, e) =>
+        {
+            if (session.ConversationHistory.Count > 0)
+            {
+                string historyJson = JsonSerializer.Serialize(session.ConversationHistory);
+                _ = ExecuteJsInChatAsync(session, $"restoreChat({JsonSerializer.Serialize(historyJson)});");
+            }
+        };
     }
 
     private async void WvChat_SessionWebMessageReceived(WorkspaceSession session, CoreWebView2WebMessageReceivedEventArgs e)
@@ -88,6 +98,10 @@ public partial class FormMain : Form
                     Log("Error: No session is initialized. Please make sure a workspace is opened.", session);
                     return;
                 }
+
+                // Add to history and save
+                session.ConversationHistory.Add(new ChatMessage { Sender = "user", Text = text });
+                SaveSessionHistory(session);
 
                 // Show typing indicator in UI
                 _ = ExecuteJsInChatAsync(session, "showTyping(true);");
@@ -192,12 +206,21 @@ public partial class FormMain : Form
                         session.PartTypes.TryGetValue(partId, out string? pType);
                         pType ??= "text";
 
+                        if (session.ConversationHistory.Count == 0 || session.ConversationHistory[session.ConversationHistory.Count - 1].Sender != "assistant")
+                        {
+                            session.ConversationHistory.Add(new ChatMessage { Sender = "assistant", Text = "", Reasoning = "" });
+                        }
+
+                        var lastMsg = session.ConversationHistory[session.ConversationHistory.Count - 1];
+
                         if (pType == "reasoning")
                         {
+                            lastMsg.Reasoning += delta;
                             _ = ExecuteJsInChatAsync(session, $"appendReasoningChunk({JsonSerializer.Serialize(delta)});");
                         }
                         else
                         {
+                            lastMsg.Text += delta;
                             _ = ExecuteJsInChatAsync(session, $"appendTextChunk({JsonSerializer.Serialize(delta)});");
                         }
                     }
@@ -209,6 +232,7 @@ public partial class FormMain : Form
                         if (info.TryGetProperty("finish", out var finishVal) && !string.IsNullOrEmpty(finishVal.GetString()))
                         {
                             _ = ExecuteJsInChatAsync(session, "finalizeResponse();");
+                            SaveSessionHistory(session);
                         }
                     }
                     break;
@@ -216,6 +240,7 @@ public partial class FormMain : Form
                 case "session.idle":
                     _ = ExecuteJsInChatAsync(session, "finalizeResponse();");
                     SetStatus(session, "Ready", Theme.Success);
+                    SaveSessionHistory(session);
                     break;
 
                 case "permission.asked":
@@ -310,7 +335,6 @@ public partial class FormMain : Form
         _lblStatusText.Text = session.StatusText;
         _lblStatusText.ForeColor = session.StatusColor;
 
-        // Prevent firing change events while syncing states
         _chkYolo.Checked = session.YoloMode;
         UpdateYoloButtonStyle(session.YoloMode);
 
@@ -349,6 +373,10 @@ public partial class FormMain : Form
         session.SessionID = await session.Client.CreateSessionAsync(session.WorkspacePath, session.ActiveModel, session.AgentMode);
         Log($"New Session created: {session.SessionID}", session);
 
+        // Clear history and save
+        session.ConversationHistory.Clear();
+        SaveSessionHistory(session);
+
         _ = ExecuteJsInChatAsync(session, "clearChat();");
     }
 
@@ -374,6 +402,21 @@ public partial class FormMain : Form
 
         session.Controller.OpenWorkspace(path);
         UpdateContextEstimation(session);
+
+        // Check if there is saved conversation history
+        var savedConv = ConversationHistoryManager.Load(path);
+        bool hasSavedHistory = false;
+
+        if (savedConv != null && !string.IsNullOrEmpty(savedConv.SessionID))
+        {
+            session.SessionID = savedConv.SessionID;
+            session.ActiveModel = savedConv.ActiveModel;
+            session.AgentMode = savedConv.AgentMode;
+            session.YoloMode = savedConv.YoloMode;
+            session.ConversationHistory.AddRange(savedConv.Messages);
+            hasSavedHistory = true;
+            Log($"Restoring previous conversation history: {session.SessionID}", session);
+        }
 
         // Initialize WebView
         try
@@ -410,23 +453,29 @@ public partial class FormMain : Form
             }
         }
 
-        // Try selecting saved model or the first discovered one
-        if (_cmbModel.Items.Contains(settings.ActiveModel))
+        if (!hasSavedHistory)
         {
-            session.ActiveModel = settings.ActiveModel;
-        }
-        else if (sortedModels.Count > 0)
-        {
-            session.ActiveModel = sortedModels[0];
+            // Try selecting saved model or the first discovered one
+            if (_cmbModel.Items.Contains(settings.ActiveModel))
+            {
+                session.ActiveModel = settings.ActiveModel;
+            }
+            else if (sortedModels.Count > 0)
+            {
+                session.ActiveModel = sortedModels[0];
+            }
         }
 
         // Sync header UI controls for this session
         TabControl_SelectedIndexChanged(null, EventArgs.Empty);
 
-        // Initialize Session
-        Log($"Initializing session with model: {session.ActiveModel} in {session.AgentMode} mode", session);
-        session.SessionID = await session.Client.CreateSessionAsync(path, session.ActiveModel, session.AgentMode);
-        Log($"Session created: {session.SessionID}", session);
+        // Initialize Session (only if we didn't restore an active session)
+        if (!hasSavedHistory)
+        {
+            Log($"Initializing session with model: {session.ActiveModel} in {session.AgentMode} mode", session);
+            session.SessionID = await session.Client.CreateSessionAsync(path, session.ActiveModel, session.AgentMode);
+            Log($"Session created: {session.SessionID}", session);
+        }
 
         // Start SSE events listener
         session.Client.StartEventSubscription(path);
@@ -455,6 +504,7 @@ public partial class FormMain : Form
         Log($"Session re-initialized: {session.SessionID}", session);
 
         SetStatus(session, "Ready", Theme.Success);
+        SaveSessionHistory(session);
     }
 
     private async void cmbMode_SelectedIndexChanged(object? sender, EventArgs e)
@@ -481,6 +531,7 @@ public partial class FormMain : Form
         Log($"Session re-initialized in {modeStr} mode: {session.SessionID}", session);
 
         SetStatus(session, "Ready", Theme.Success);
+        SaveSessionHistory(session);
     }
 
     private void chkYolo_CheckedChanged(object? sender, EventArgs e)
@@ -498,6 +549,7 @@ public partial class FormMain : Form
         settings.YoloMode = isYolo;
         SettingsManager.Save(settings);
         Log($"YOLO Mode: {(isYolo ? "ENABLED (Auto-approves all tool runs)" : "DISABLED (Requires user confirmations)")}", session);
+        SaveSessionHistory(session);
     }
 
     private void UpdateYoloButtonStyle(bool isYolo)
@@ -588,22 +640,6 @@ public partial class FormMain : Form
         {
             Log($"[Error opening file]: {ex.Message}");
         }
-    }
-
-    public static void SetSplitterDistanceSafe(SplitContainer split, int distance)
-    {
-        int min = split.Panel1MinSize;
-        int max = split.Width - split.Panel2MinSize;
-        if (max < min) return;
-
-        if (distance < min) distance = min;
-        if (distance > max) distance = max;
-
-        try
-        {
-            split.SplitterDistance = distance;
-        }
-        catch { }
     }
 
     private void TvFiles_AfterCheck(object? sender, TreeViewEventArgs e)
@@ -742,6 +778,21 @@ public partial class FormMain : Form
         catch { }
     }
 
+    private void SaveSessionHistory(WorkspaceSession session)
+    {
+        if (string.IsNullOrEmpty(session.WorkspacePath)) return;
+
+        var saved = new SavedConversation
+        {
+            SessionID = session.SessionID,
+            ActiveModel = session.ActiveModel,
+            AgentMode = session.AgentMode,
+            YoloMode = session.YoloMode,
+            Messages = session.ConversationHistory
+        };
+        ConversationHistoryManager.Save(session.WorkspacePath, saved);
+    }
+
     private void FormMain_FormClosed(object? sender, FormClosedEventArgs e)
     {
         foreach (TabPage tab in _tabControl.TabPages)
@@ -758,5 +809,21 @@ public partial class FormMain : Form
         if (string.IsNullOrEmpty(modelTag)) return false;
         string lower = modelTag.ToLowerInvariant();
         return lower.StartsWith("ollama/") || lower.Contains("-free") || lower.Contains("/free") || lower.Contains("free");
+    }
+
+    public static void SetSplitterDistanceSafe(SplitContainer split, int distance)
+    {
+        int min = split.Panel1MinSize;
+        int max = split.Width - split.Panel2MinSize;
+        if (max < min) return;
+
+        if (distance < min) distance = min;
+        if (distance > max) distance = max;
+
+        try
+        {
+            split.SplitterDistance = distance;
+        }
+        catch { }
     }
 }
