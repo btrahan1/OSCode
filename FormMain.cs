@@ -580,7 +580,7 @@ public partial class FormMain : Form
 
             if (session.SplitContent.SplitterDistance >= session.SplitContent.Width - 100)
             {
-                session.SplitContent.SplitterDistance = (int)(session.SplitContent.Width * 0.6); // give 60% to Chat, 40% to code viewer
+                SetSplitterDistanceSafe(session.SplitContent, (int)(session.SplitContent.Width * 0.6));
             }
             Log($"Opened file in viewer: {Path.GetFileName(path)}", session);
         }
@@ -588,6 +588,22 @@ public partial class FormMain : Form
         {
             Log($"[Error opening file]: {ex.Message}");
         }
+    }
+
+    public static void SetSplitterDistanceSafe(SplitContainer split, int distance)
+    {
+        int min = split.Panel1MinSize;
+        int max = split.Width - split.Panel2MinSize;
+        if (max < min) return;
+
+        if (distance < min) distance = min;
+        if (distance > max) distance = max;
+
+        try
+        {
+            split.SplitterDistance = distance;
+        }
+        catch { }
     }
 
     private void TvFiles_AfterCheck(object? sender, TreeViewEventArgs e)

@@ -393,7 +393,7 @@ public partial class FormMain
         btnCloseViewer.FlatAppearance.BorderColor = Theme.Border;
         btnCloseViewer.FlatAppearance.BorderSize = 1;
         btnCloseViewer.Click += (s, ev) => {
-            session.SplitContent.SplitterDistance = session.SplitContent.Width; // hide right panel
+            SetSplitterDistanceSafe(session.SplitContent, session.SplitContent.Width);
         };
         session.PnlFileViewer.Controls.Add(btnCloseViewer, 1, 0);
 
@@ -451,9 +451,9 @@ public partial class FormMain
         session.TvFiles.AfterCheck += TvFiles_AfterCheck;
 
         // Default Split Distances
-        splitWorkspace.SplitterDistance = 280;
-        splitMain.SplitterDistance = 650;
-        session.SplitContent.SplitterDistance = session.SplitContent.Width; // initially hide right code viewer
+        SetSplitterDistanceSafe(splitWorkspace, 280);
+        SetSplitterDistanceSafe(splitMain, 650);
+        SetSplitterDistanceSafe(session.SplitContent, session.SplitContent.Width);
 
         _tabControl.TabPages.Add(tabPage);
         _tabControl.SelectedTab = tabPage;
