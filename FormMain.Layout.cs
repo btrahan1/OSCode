@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -7,27 +8,23 @@ namespace OSCode;
 
 public partial class FormMain
 {
-    // UI Elements
+    // Global Header & Config UI Elements
     private ComboBox _cmbModel = null!;
     private ComboBox _cmbMode = null!;
     private CheckBox _chkYolo = null!;
     private Label _lblWorkspaceStatus = null!;
     private Button _btnOpenFolder = null!;
     private Button _btnNewChat = null!;
-    private TreeView _tvFiles = null!;
-    private ContextMenuStrip _explorerContextMenu = null!;
-    private WebView2 _wvChat = null!;
-    private RichTextBox _rtbLogs = null!;
     private Label _lblStatusText = null!;
+    private ContextMenuStrip _explorerContextMenu = null!;
 
-    // File Viewer Fields
-    private TableLayoutPanel _pnlFileViewer = null!;
-    private Label _lblViewerHeader = null!;
-    private RichTextBox _rtbCodeViewer = null!;
+    // Multiplexed Workspace Elements
+    private TabControl _tabControl = null!;
+    private ContextMenuStrip _tabContextMenu = null!;
 
     private void SetupDynamicLayout()
     {
-        // 1. Root Layout Table (Header + Workspace split)
+        // 1. Root Layout Table (Header + Workspace tab control)
         var rootLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -182,7 +179,73 @@ public partial class FormMain
         };
         pnlHeader.Controls.Add(_lblStatusText, 6, 0);
 
-        // 3. Workspace Splitter (Left: Sidebar, Right: Main Views)
+        // 3. TabControl for multiple concurrent workspaces
+        _tabControl = new TabControl
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Background,
+            Font = Theme.RegularFont
+        };
+        rootLayout.Controls.Add(_tabControl, 0, 1);
+
+        // Context menu for TabControl (close tabs)
+        _tabContextMenu = new ContextMenuStrip();
+        var menuCloseTab = new ToolStripMenuItem("✕ Close Tab");
+        _tabContextMenu.Items.Add(menuCloseTab);
+        _tabControl.ContextMenuStrip = _tabContextMenu;
+
+        _tabControl.MouseClick += (s, ev) =>
+        {
+            if (ev.Button == MouseButtons.Right)
+            {
+                for (int i = 0; i < _tabControl.TabCount; i++)
+                {
+                    if (_tabControl.GetTabRect(i).Contains(ev.Location))
+                    {
+                        _tabControl.SelectedIndex = i;
+                        _tabContextMenu.Show(_tabControl, ev.Location);
+                        break;
+                    }
+                }
+            }
+        };
+
+        menuCloseTab.Click += btnCloseTab_Click;
+
+        // Context Menu Setup for File Trees
+        _explorerContextMenu = new ContextMenuStrip();
+        var menuOpenExplorer = new ToolStripMenuItem("📂 Open in File Explorer");
+        _explorerContextMenu.Items.Add(menuOpenExplorer);
+
+        // Wireup global events
+        _btnOpenFolder.Click += btnOpenFolder_Click;
+        _btnNewChat.Click += btnNewChat_Click;
+        btnSettings.Click += btnSettings_Click;
+        _chkYolo.CheckedChanged += chkYolo_CheckedChanged;
+        _cmbModel.SelectedIndexChanged += cmbModel_SelectedIndexChanged;
+        _cmbMode.SelectedIndexChanged += cmbMode_SelectedIndexChanged;
+        menuOpenExplorer.Click += btnOpenExplorer_Click;
+    }
+
+    public WorkspaceSession CreateWorkspaceTab(string path)
+    {
+        var session = new WorkspaceSession
+        {
+            WorkspacePath = path,
+            ActiveModel = _cmbModel.SelectedItem?.ToString() ?? "opencode/deepseek-v4-flash-free",
+            AgentMode = _cmbMode.SelectedIndex == 1 ? "plan" : "coder",
+            YoloMode = _chkYolo.Checked
+        };
+
+        var tabPage = new TabPage
+        {
+            Text = $"📁 {Path.GetFileName(path)}",
+            BackColor = Theme.Background,
+            Tag = session
+        };
+        session.TabPage = tabPage;
+
+        // Workspace Splitter (Left: Sidebar, Right: Main Views)
         var splitWorkspace = new SplitContainer
         {
             Dock = DockStyle.Fill,
@@ -190,9 +253,9 @@ public partial class FormMain
             SplitterWidth = 6,
             BackColor = Theme.Border
         };
-        rootLayout.Controls.Add(splitWorkspace, 0, 1);
+        tabPage.Controls.Add(splitWorkspace);
 
-        // 4. Sidebar Content Container (Left Panel)
+        // Sidebar Content Container (Left Panel)
         var pnlSidebar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -242,7 +305,7 @@ public partial class FormMain
         pnlSidebarHeader.Controls.Add(btnCopyContext, 1, 0);
         pnlSidebar.Controls.Add(pnlSidebarHeader, 0, 0);
 
-        _tvFiles = new TreeView
+        session.TvFiles = new TreeView
         {
             Dock = DockStyle.Fill,
             BackColor = Theme.Surface,
@@ -253,23 +316,18 @@ public partial class FormMain
             Indent = 15,
             CheckBoxes = true
         };
-        pnlSidebar.Controls.Add(_tvFiles, 0, 1);
+        pnlSidebar.Controls.Add(session.TvFiles, 0, 1);
+        session.TvFiles.ContextMenuStrip = _explorerContextMenu;
 
-        // Context Menu Setup
-        _explorerContextMenu = new ContextMenuStrip();
-        var menuOpenExplorer = new ToolStripMenuItem("📂 Open in File Explorer");
-        _explorerContextMenu.Items.Add(menuOpenExplorer);
-        _tvFiles.ContextMenuStrip = _explorerContextMenu;
-
-        _tvFiles.NodeMouseClick += (s, ev) =>
+        session.TvFiles.NodeMouseClick += (s, ev) =>
         {
             if (ev.Button == MouseButtons.Right)
             {
-                _tvFiles.SelectedNode = ev.Node;
+                session.TvFiles.SelectedNode = ev.Node;
             }
         };
 
-        // 5. Main Splitter (Top: Chat WebView2 + File Viewer, Bottom: Console Logs)
+        // Main Splitter (Top: Chat WebView2 + File Viewer, Bottom: Console Logs)
         var splitMain = new SplitContainer
         {
             Dock = DockStyle.Fill,
@@ -280,24 +338,24 @@ public partial class FormMain
         splitWorkspace.Panel2.Controls.Add(splitMain);
 
         // Nested Vertical Split for Chat WebView2 (Left) and File Viewer (Right)
-        var splitContent = new SplitContainer
+        session.SplitContent = new SplitContainer
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
             SplitterWidth = 6,
             BackColor = Theme.Border
         };
-        splitMain.Panel1.Controls.Add(splitContent);
+        splitMain.Panel1.Controls.Add(session.SplitContent);
 
         // WebView2 Container (Left side of splitContent)
-        _wvChat = new WebView2
+        session.WvChat = new WebView2
         {
             Dock = DockStyle.Fill
         };
-        splitContent.Panel1.Controls.Add(_wvChat);
+        session.SplitContent.Panel1.Controls.Add(session.WvChat);
 
         // File Viewer Panel (Right side of splitContent)
-        _pnlFileViewer = new TableLayoutPanel
+        session.PnlFileViewer = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
@@ -306,13 +364,13 @@ public partial class FormMain
             Padding = new Padding(4),
             Margin = new Padding(0)
         };
-        _pnlFileViewer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // Title
-        _pnlFileViewer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));  // Close Button
-        _pnlFileViewer.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));       // Header row
-        _pnlFileViewer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));       // Code viewer row
-        splitContent.Panel2.Controls.Add(_pnlFileViewer);
+        session.PnlFileViewer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // Title
+        session.PnlFileViewer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));  // Close Button
+        session.PnlFileViewer.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));       // Header row
+        session.PnlFileViewer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));       // Code viewer row
+        session.SplitContent.Panel2.Controls.Add(session.PnlFileViewer);
 
-        _lblViewerHeader = new Label
+        session.LblViewerHeader = new Label
         {
             Text = "📄 CODE VIEWER",
             Dock = DockStyle.Fill,
@@ -320,7 +378,7 @@ public partial class FormMain
             Font = Theme.HeaderFont,
             TextAlign = ContentAlignment.MiddleLeft
         };
-        _pnlFileViewer.Controls.Add(_lblViewerHeader, 0, 0);
+        session.PnlFileViewer.Controls.Add(session.LblViewerHeader, 0, 0);
 
         var btnCloseViewer = new Button
         {
@@ -335,11 +393,11 @@ public partial class FormMain
         btnCloseViewer.FlatAppearance.BorderColor = Theme.Border;
         btnCloseViewer.FlatAppearance.BorderSize = 1;
         btnCloseViewer.Click += (s, ev) => {
-            splitContent.SplitterDistance = splitContent.Width; // hide right panel
+            session.SplitContent.SplitterDistance = session.SplitContent.Width; // hide right panel
         };
-        _pnlFileViewer.Controls.Add(btnCloseViewer, 1, 0);
+        session.PnlFileViewer.Controls.Add(btnCloseViewer, 1, 0);
 
-        _rtbCodeViewer = new RichTextBox
+        session.RtbCodeViewer = new RichTextBox
         {
             Dock = DockStyle.Fill,
             BackColor = Theme.Surface,
@@ -349,10 +407,10 @@ public partial class FormMain
             BorderStyle = BorderStyle.FixedSingle,
             WordWrap = false
         };
-        _pnlFileViewer.Controls.Add(_rtbCodeViewer, 0, 1);
-        _pnlFileViewer.SetColumnSpan(_rtbCodeViewer, 2);
+        session.PnlFileViewer.Controls.Add(session.RtbCodeViewer, 0, 1);
+        session.PnlFileViewer.SetColumnSpan(session.RtbCodeViewer, 2);
 
-        // 6. Logs & Output Console Panel (Bottom Panel)
+        // Logs & Output Console Panel (Bottom Panel)
         var pnlLogs = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -376,7 +434,7 @@ public partial class FormMain
         };
         pnlLogs.Controls.Add(lblLogsHeader, 0, 0);
 
-        _rtbLogs = new RichTextBox
+        session.RtbLogs = new RichTextBox
         {
             Dock = DockStyle.Fill,
             BackColor = Theme.Surface,
@@ -386,22 +444,20 @@ public partial class FormMain
             BorderStyle = BorderStyle.FixedSingle,
             WordWrap = true
         };
-        pnlLogs.Controls.Add(_rtbLogs, 0, 1);
+        pnlLogs.Controls.Add(session.RtbLogs, 0, 1);
 
-        // Wireup settings and open folder buttons click events
-        _btnOpenFolder.Click += btnOpenFolder_Click;
-        _btnNewChat.Click += btnNewChat_Click;
-        btnSettings.Click += btnSettings_Click;
-        _chkYolo.CheckedChanged += chkYolo_CheckedChanged;
-        _cmbModel.SelectedIndexChanged += cmbModel_SelectedIndexChanged;
-        _cmbMode.SelectedIndexChanged += cmbMode_SelectedIndexChanged;
+        // Wireup session-specific events
         btnCopyContext.Click += btnCopyContext_Click;
-        menuOpenExplorer.Click += btnOpenExplorer_Click;
-        _tvFiles.AfterCheck += TvFiles_AfterCheck;
+        session.TvFiles.AfterCheck += TvFiles_AfterCheck;
 
         // Default Split Distances
         splitWorkspace.SplitterDistance = 280;
         splitMain.SplitterDistance = 650;
-        splitContent.SplitterDistance = splitContent.Width; // initially hide right code viewer
+        session.SplitContent.SplitterDistance = session.SplitContent.Width; // initially hide right code viewer
+
+        _tabControl.TabPages.Add(tabPage);
+        _tabControl.SelectedTab = tabPage;
+
+        return session;
     }
 }

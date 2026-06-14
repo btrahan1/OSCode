@@ -15,12 +15,8 @@ namespace OSCode;
 
 public partial class FormMain : Form
 {
-    private OpenCodeClient _openCodeClient = null!;
-    private WorkspaceController _workspaceController = null!;
-    private string _workspacePath = string.Empty;
     private string _activeFilePath = string.Empty;
-    private string _sessionID = string.Empty;
-    private readonly Dictionary<string, string> _partTypes = new();
+    private WorkspaceSession? ActiveSession => _tabControl.SelectedTab?.Tag as WorkspaceSession;
 
     public FormMain()
     {
@@ -41,22 +37,7 @@ public partial class FormMain : Form
     {
         Log("Initializing OSCode workspace...");
 
-        _workspaceController = new WorkspaceController(_tvFiles);
-        _workspaceController.FileSelected += WorkspaceController_FileSelected;
-        _workspaceController.LogMessageReceived += msg => Log(msg);
-
-        _openCodeClient = new OpenCodeClient(19888);
-        _openCodeClient.ServerLogReceived += msg => Log($"[OpenCode Server]: {msg}");
-        _openCodeClient.EventReceived += OpenCodeClient_EventReceived;
-
-        try
-        {
-            await InitializeWebViewAsync();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Failed to initialize WebView2: {ex.Message}", "WebView2 Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        _tabControl.SelectedIndexChanged += TabControl_SelectedIndexChanged;
 
         var settings = SettingsManager.Load();
         _chkYolo.Checked = settings.YoloMode;
@@ -72,9 +53,9 @@ public partial class FormMain : Form
         }
     }
 
-    private async Task InitializeWebViewAsync()
+    private async Task InitializeSessionWebViewAsync(WorkspaceSession session)
     {
-        await _wvChat.EnsureCoreWebView2Async(null);
+        await session.WvChat.EnsureCoreWebView2Async(null);
         
         string htmlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "oscode-chat.html");
         if (!File.Exists(htmlPath))
@@ -82,11 +63,11 @@ public partial class FormMain : Form
             File.WriteAllText(htmlPath, "<h3>Local chat template not found in output directory.</h3>");
         }
 
-        _wvChat.CoreWebView2.Navigate(new Uri(htmlPath).AbsoluteUri);
-        _wvChat.WebMessageReceived += WvChat_WebMessageReceived;
+        session.WvChat.CoreWebView2.Navigate(new Uri(htmlPath).AbsoluteUri);
+        session.WvChat.WebMessageReceived += (s, e) => WvChat_SessionWebMessageReceived(session, e);
     }
 
-    private async void WvChat_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    private async void WvChat_SessionWebMessageReceived(WorkspaceSession session, CoreWebView2WebMessageReceivedEventArgs e)
     {
         string rawJson = e.WebMessageAsJson;
 
@@ -100,52 +81,52 @@ public partial class FormMain : Form
             if (type == "user_prompt")
             {
                 string text = root.GetProperty("text").GetString() ?? "";
-                Log($"[User Prompt]: {text}");
+                Log($"[User Prompt]: {text}", session);
                 
-                if (string.IsNullOrEmpty(_sessionID))
+                if (string.IsNullOrEmpty(session.SessionID))
                 {
-                    Log("Error: No session is initialized. Please make sure a workspace is opened.");
+                    Log("Error: No session is initialized. Please make sure a workspace is opened.", session);
                     return;
                 }
 
                 // Show typing indicator in UI
-                _ = ExecuteJsInChatAsync("showTyping(true);");
-                SetStatus("Working...", Theme.Primary);
+                _ = ExecuteJsInChatAsync(session, "showTyping(true);");
+                SetStatus(session, "Working...", Theme.Primary);
 
-                bool success = await _openCodeClient.SendMessageAsync(_sessionID, text, _workspacePath);
+                bool success = await session.Client.SendMessageAsync(session.SessionID, text, session.WorkspacePath);
                 if (!success)
                 {
-                    _ = ExecuteJsInChatAsync("showTyping(false);");
-                    _ = ExecuteJsInChatAsync("setGenerating(false);");
-                    Log("Failed to deliver message to OpenCode session.");
-                    SetStatus("Ready", Theme.Success);
+                    _ = ExecuteJsInChatAsync(session, "showTyping(false);");
+                    _ = ExecuteJsInChatAsync(session, "setGenerating(false);");
+                    Log("Failed to deliver message to OpenCode session.", session);
+                    SetStatus(session, "Ready", Theme.Success);
                 }
             }
             else if (type == "cancel_prompt")
             {
-                Log("Stopping current prompt...");
-                if (!string.IsNullOrEmpty(_sessionID))
+                Log("Stopping current prompt...", session);
+                if (!string.IsNullOrEmpty(session.SessionID))
                 {
-                    await _openCodeClient.CancelSessionAsync(_sessionID);
+                    await session.Client.CancelSessionAsync(session.SessionID);
                 }
 
                 // Re-initialize session to reset the execution queue
-                string selectedModel = _cmbModel.SelectedItem?.ToString() ?? "opencode/deepseek-v4-flash-free";
-                string modeStr = _cmbMode.SelectedIndex == 1 ? "plan" : "coder";
-                _sessionID = await _openCodeClient.CreateSessionAsync(_workspacePath, selectedModel, modeStr);
-                Log($"New Session created after cancel: {_sessionID}");
+                string selectedModel = session.ActiveModel;
+                string modeStr = session.AgentMode;
+                session.SessionID = await session.Client.CreateSessionAsync(session.WorkspacePath, selectedModel, modeStr);
+                Log($"New Session created after cancel: {session.SessionID}", session);
 
-                _ = ExecuteJsInChatAsync("setGenerating(false);");
-                _ = ExecuteJsInChatAsync("showTyping(false);");
-                SetStatus("Ready", Theme.Success);
+                _ = ExecuteJsInChatAsync(session, "setGenerating(false);");
+                _ = ExecuteJsInChatAsync(session, "showTyping(false);");
+                SetStatus(session, "Ready", Theme.Success);
             }
             else if (type == "permission_reply")
             {
                 string requestID = root.GetProperty("requestID").GetString() ?? "";
                 string reply = root.GetProperty("reply").GetString() ?? "";
-                Log($"[User Permission Reply]: ID: {requestID}, Response: {reply}");
-                SetStatus("Working...", Theme.Primary);
-                await _openCodeClient.ReplyToPermissionAsync(requestID, reply, _workspacePath);
+                Log($"[User Permission Reply]: ID: {requestID}, Response: {reply}", session);
+                SetStatus(session, "Working...", Theme.Primary);
+                await session.Client.ReplyToPermissionAsync(requestID, reply, session.WorkspacePath);
             }
             else if (type == "question_reply")
             {
@@ -158,9 +139,9 @@ public partial class FormMain : Form
                         answers.Add(elem.GetString() ?? "");
                     }
                 }
-                Log($"[User Question Answers]: ID: {requestID}, Answers: {string.Join(", ", answers)}");
-                SetStatus("Working...", Theme.Primary);
-                await _openCodeClient.ReplyToQuestionAsync(requestID, answers, _workspacePath);
+                Log($"[User Question Answers]: ID: {requestID}, Answers: {string.Join(", ", answers)}", session);
+                SetStatus(session, "Working...", Theme.Primary);
+                await session.Client.ReplyToQuestionAsync(requestID, answers, session.WorkspacePath);
             }
         }
         catch (Exception ex)
@@ -169,11 +150,11 @@ public partial class FormMain : Form
         }
     }
 
-    private void OpenCodeClient_EventReceived(string eventType, string dataJson)
+    private void OpenCodeClient_SessionEventReceived(WorkspaceSession session, string eventType, string dataJson)
     {
         if (InvokeRequired)
         {
-            Invoke(new Action<string, string>(OpenCodeClient_EventReceived), eventType, dataJson);
+            Invoke(new Action<WorkspaceSession, string, string>(OpenCodeClient_SessionEventReceived), session, eventType, dataJson);
             return;
         }
 
@@ -197,7 +178,7 @@ public partial class FormMain : Form
                         string partType = part.TryGetProperty("type", out var typeVal) ? typeVal.GetString() ?? "" : "";
                         if (!string.IsNullOrEmpty(partId))
                         {
-                            _partTypes[partId] = partType;
+                            session.PartTypes[partId] = partType;
                         }
                     }
                     break;
@@ -208,16 +189,16 @@ public partial class FormMain : Form
                         string partId = deltaProps.TryGetProperty("partID", out var idVal) ? idVal.GetString() ?? "" : "";
                         string delta = deltaProps.TryGetProperty("delta", out var deltaVal) ? deltaVal.GetString() ?? "" : "";
 
-                        _partTypes.TryGetValue(partId, out string? pType);
+                        session.PartTypes.TryGetValue(partId, out string? pType);
                         pType ??= "text";
 
                         if (pType == "reasoning")
                         {
-                            _ = ExecuteJsInChatAsync($"appendReasoningChunk({JsonSerializer.Serialize(delta)});");
+                            _ = ExecuteJsInChatAsync(session, $"appendReasoningChunk({JsonSerializer.Serialize(delta)});");
                         }
                         else
                         {
-                            _ = ExecuteJsInChatAsync($"appendTextChunk({JsonSerializer.Serialize(delta)});");
+                            _ = ExecuteJsInChatAsync(session, $"appendTextChunk({JsonSerializer.Serialize(delta)});");
                         }
                     }
                     break;
@@ -227,14 +208,14 @@ public partial class FormMain : Form
                     {
                         if (info.TryGetProperty("finish", out var finishVal) && !string.IsNullOrEmpty(finishVal.GetString()))
                         {
-                            _ = ExecuteJsInChatAsync("finalizeResponse();");
+                            _ = ExecuteJsInChatAsync(session, "finalizeResponse();");
                         }
                     }
                     break;
 
                 case "session.idle":
-                    _ = ExecuteJsInChatAsync("finalizeResponse();");
-                    SetStatus("Ready", Theme.Success);
+                    _ = ExecuteJsInChatAsync(session, "finalizeResponse();");
+                    SetStatus(session, "Ready", Theme.Success);
                     break;
 
                 case "permission.asked":
@@ -249,18 +230,18 @@ public partial class FormMain : Form
                             details = meta.ToString() ?? "";
                         }
 
-                        Log($"[Permission Required]: ID: {reqId}, Tool: {permName}");
+                        Log($"[Permission Required]: ID: {reqId}, Tool: {permName}", session);
 
-                        if (_chkYolo.Checked)
+                        if (session.YoloMode)
                         {
-                            Log($"YOLO Mode is ON. Auto-approving {permName}...");
-                            SetStatus("Working...", Theme.Primary);
-                            _ = _openCodeClient.ReplyToPermissionAsync(reqId, "once", _workspacePath);
+                            Log($"YOLO Mode is ON. Auto-approving {permName}...", session);
+                            SetStatus(session, "Working...", Theme.Primary);
+                            _ = session.Client.ReplyToPermissionAsync(reqId, "once", session.WorkspacePath);
                         }
                         else
                         {
-                            _ = ExecuteJsInChatAsync($"addPermissionWidget({JsonSerializer.Serialize(reqId)}, {JsonSerializer.Serialize(permName)}, {JsonSerializer.Serialize(details)});");
-                            SetStatus("⚠️ Pending authorization", Color.FromArgb(245, 124, 0));
+                            _ = ExecuteJsInChatAsync(session, $"addPermissionWidget({JsonSerializer.Serialize(reqId)}, {JsonSerializer.Serialize(permName)}, {JsonSerializer.Serialize(details)});");
+                            SetStatus(session, "⚠️ Pending authorization", Color.FromArgb(245, 124, 0));
                         }
                     }
                     break;
@@ -292,16 +273,16 @@ public partial class FormMain : Form
                             }
                         }
 
-                        Log($"[Clarification Required]: ID: {reqId}, Questions Count: {questionsList.Count}");
+                        Log($"[Clarification Required]: ID: {reqId}, Questions Count: {questionsList.Count}", session);
                         string questionsJson = JsonSerializer.Serialize(questionsList);
-                        _ = ExecuteJsInChatAsync($"addQuestionWidget({JsonSerializer.Serialize(reqId)}, {questionsJson});");
-                        SetStatus("❓ Clarification requested", Color.FromArgb(245, 124, 0));
+                        _ = ExecuteJsInChatAsync(session, $"addQuestionWidget({JsonSerializer.Serialize(reqId)}, {questionsJson});");
+                        SetStatus(session, "❓ Clarification requested", Color.FromArgb(245, 124, 0));
                     }
                     break;
 
                 case "workspace.status":
                 case "file.edited":
-                    RefreshFileTreeOnMainThread();
+                    RefreshFileTreeOnMainThread(session);
                     break;
             }
         }
@@ -309,6 +290,37 @@ public partial class FormMain : Form
         {
             Log($"[Error processing Event]: {ex.Message}");
         }
+    }
+
+    private void TabControl_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        var session = ActiveSession;
+        if (session == null)
+        {
+            _lblWorkspaceStatus.Text = "No Workspace Folder Loaded (Anchor a folder to begin development)";
+            _lblWorkspaceStatus.ForeColor = Theme.TextSecondary;
+            _lblStatusText.Text = "Ready";
+            _lblStatusText.ForeColor = Theme.Success;
+            return;
+        }
+
+        _lblWorkspaceStatus.Text = $"Active Folder: {session.WorkspacePath}";
+        _lblWorkspaceStatus.ForeColor = Theme.TextMain;
+
+        _lblStatusText.Text = session.StatusText;
+        _lblStatusText.ForeColor = session.StatusColor;
+
+        // Prevent firing change events while syncing states
+        _chkYolo.Checked = session.YoloMode;
+        UpdateYoloButtonStyle(session.YoloMode);
+
+        if (!_cmbModel.Items.Contains(session.ActiveModel))
+        {
+            _cmbModel.Items.Add(session.ActiveModel);
+        }
+        _cmbModel.SelectedItem = session.ActiveModel;
+
+        _cmbMode.SelectedIndex = session.AgentMode == "plan" ? 1 : 0;
     }
 
     private void btnOpenFolder_Click(object? sender, EventArgs e)
@@ -325,46 +337,59 @@ public partial class FormMain : Form
 
     private async void btnNewChat_Click(object? sender, EventArgs e)
     {
-        if (string.IsNullOrEmpty(_workspacePath))
+        var session = ActiveSession;
+        if (session == null)
         {
             MessageBox.Show("Please open a workspace folder first.", "Workspace Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        Log("Starting a new conversation session...");
+        Log("Starting a new conversation session...", session);
         
-        string selectedModel = _cmbModel.SelectedItem?.ToString() ?? "opencode/deepseek-v4-flash-free";
-        string modeStr = _cmbMode.SelectedIndex == 1 ? "plan" : "coder";
-        
-        _sessionID = await _openCodeClient.CreateSessionAsync(_workspacePath, selectedModel, modeStr);
-        Log($"New Session created: {_sessionID}");
+        session.SessionID = await session.Client.CreateSessionAsync(session.WorkspacePath, session.ActiveModel, session.AgentMode);
+        Log($"New Session created: {session.SessionID}", session);
 
-        _ = ExecuteJsInChatAsync("clearChat();");
+        _ = ExecuteJsInChatAsync(session, "clearChat();");
     }
 
     private async Task OpenWorkspaceAsync(string path)
     {
-        _workspacePath = path;
-        _lblWorkspaceStatus.Text = $"Active Folder: {path}";
-        _lblWorkspaceStatus.ForeColor = Theme.TextMain;
-        Log($"Loaded workspace: {path}");
+        Log($"Loading workspace: {path}");
+
+        // Create the WorkspaceSession and visual TabPage layout
+        var session = CreateWorkspaceTab(path);
+
+        session.Controller = new WorkspaceController(session.TvFiles);
+        session.Controller.FileSelected += (s, filePath) => WorkspaceController_FileSelected(session, filePath);
+        session.Controller.LogMessageReceived += msg => Log(msg, session);
+
+        session.Client = new OpenCodeClient(19888);
+        session.Client.ServerLogReceived += msg => Log($"[OpenCode Server]: {msg}", session);
+        session.Client.EventReceived += (evt, data) => OpenCodeClient_SessionEventReceived(session, evt, data);
 
         // Save last opened path
         var settings = SettingsManager.Load();
         settings.LastOpenedPath = path;
         SettingsManager.Save(settings);
 
-        _workspaceController.OpenWorkspace(path);
-        UpdateContextEstimation();
+        session.Controller.OpenWorkspace(path);
+        UpdateContextEstimation(session);
 
-        // Clear UI Chat
-        _ = ExecuteJsInChatAsync("clearChat();");
+        // Initialize WebView
+        try
+        {
+            await InitializeSessionWebViewAsync(session);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to initialize WebView2: {ex.Message}", "WebView2 Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
 
         // Start local OpenCode server on this folder
-        await _openCodeClient.StartServerAsync(path);
+        await session.Client.StartServerAsync(path);
 
         // List and populate models
-        var models = await _openCodeClient.DiscoverModelsAsync();
+        var models = await session.Client.DiscoverModelsAsync();
 
         // Sort models: free/local first, then paid
         var sortedModels = new List<string>();
@@ -377,93 +402,102 @@ public partial class FormMain : Form
             if (!IsFreeModel(m)) sortedModels.Add(m);
         }
 
-        _cmbModel.Items.Clear();
         foreach (var model in sortedModels)
         {
-            _cmbModel.Items.Add(model);
+            if (!_cmbModel.Items.Contains(model))
+            {
+                _cmbModel.Items.Add(model);
+            }
         }
 
-        // Try selecting saved model
-        if (!string.IsNullOrEmpty(settings.ActiveModel) && _cmbModel.Items.Contains(settings.ActiveModel))
+        // Try selecting saved model or the first discovered one
+        if (_cmbModel.Items.Contains(settings.ActiveModel))
         {
-            _cmbModel.SelectedItem = settings.ActiveModel;
+            session.ActiveModel = settings.ActiveModel;
         }
-        else if (_cmbModel.Items.Count > 0)
+        else if (sortedModels.Count > 0)
         {
-            _cmbModel.SelectedIndex = 0;
+            session.ActiveModel = sortedModels[0];
         }
 
-        // Try selecting saved agent mode
-        if (settings.AgentMode == "plan")
-        {
-            _cmbMode.SelectedIndex = 1;
-        }
-        else
-        {
-            _cmbMode.SelectedIndex = 0;
-        }
+        // Sync header UI controls for this session
+        TabControl_SelectedIndexChanged(null, EventArgs.Empty);
 
         // Initialize Session
-        string selectedModel = _cmbModel.SelectedItem?.ToString() ?? "opencode/deepseek-v4-flash-free";
-        string modeStr = _cmbMode.SelectedIndex == 1 ? "plan" : "coder";
-        Log($"Initializing session with model: {selectedModel} in {modeStr} mode");
-        _sessionID = await _openCodeClient.CreateSessionAsync(path, selectedModel, modeStr);
-        Log($"Session created: {_sessionID}");
+        Log($"Initializing session with model: {session.ActiveModel} in {session.AgentMode} mode", session);
+        session.SessionID = await session.Client.CreateSessionAsync(path, session.ActiveModel, session.AgentMode);
+        Log($"Session created: {session.SessionID}", session);
 
         // Start SSE events listener
-        _openCodeClient.StartEventSubscription(path);
+        session.Client.StartEventSubscription(path);
     }
 
     private async void cmbModel_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (string.IsNullOrEmpty(_workspacePath) || _cmbModel.SelectedItem == null) return;
+        var session = ActiveSession;
+        if (session == null || _cmbModel.SelectedItem == null) return;
         string model = _cmbModel.SelectedItem.ToString()!;
         
-        Log($"Changing active model to: {model}");
+        // Prevent trigger during tab selection sync
+        if (session.ActiveModel == model) return;
+
+        Log($"Changing active model to: {model}", session);
+        session.ActiveModel = model;
+
         var settings = SettingsManager.Load();
         settings.ActiveModel = model;
         SettingsManager.Save(settings);
 
-        SetStatus("Reinitializing...", Theme.Primary);
+        SetStatus(session, "Reinitializing...", Theme.Primary);
 
         // Reset Session with new model
-        string modeStr = _cmbMode.SelectedIndex == 1 ? "plan" : "coder";
-        _sessionID = await _openCodeClient.CreateSessionAsync(_workspacePath, model, modeStr);
-        Log($"Session re-initialized: {_sessionID}");
+        session.SessionID = await session.Client.CreateSessionAsync(session.WorkspacePath, model, session.AgentMode);
+        Log($"Session re-initialized: {session.SessionID}", session);
 
-        SetStatus("Ready", Theme.Success);
+        SetStatus(session, "Ready", Theme.Success);
     }
 
     private async void cmbMode_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (string.IsNullOrEmpty(_workspacePath) || _cmbMode.SelectedItem == null) return;
+        var session = ActiveSession;
+        if (session == null || _cmbMode.SelectedItem == null) return;
         
         string modeStr = _cmbMode.SelectedIndex == 1 ? "plan" : "coder";
-        Log($"Changing active mode to: {(_cmbMode.SelectedIndex == 1 ? "Plan Mode" : "Build Mode")}");
+        
+        // Prevent trigger during tab selection sync
+        if (session.AgentMode == modeStr) return;
+
+        Log($"Changing active mode to: {(modeStr == "plan" ? "Plan Mode" : "Build Mode")}", session);
+        session.AgentMode = modeStr;
         
         var settings = SettingsManager.Load();
         settings.AgentMode = modeStr;
         SettingsManager.Save(settings);
 
-        SetStatus("Reinitializing...", Theme.Primary);
+        SetStatus(session, "Reinitializing...", Theme.Primary);
 
         // Reset Session with new mode
-        string selectedModel = _cmbModel.SelectedItem?.ToString() ?? "opencode/deepseek-v4-flash-free";
-        _sessionID = await _openCodeClient.CreateSessionAsync(_workspacePath, selectedModel, modeStr);
-        Log($"Session re-initialized in {modeStr} mode: {_sessionID}");
+        session.SessionID = await session.Client.CreateSessionAsync(session.WorkspacePath, session.ActiveModel, modeStr);
+        Log($"Session re-initialized in {modeStr} mode: {session.SessionID}", session);
 
-        SetStatus("Ready", Theme.Success);
+        SetStatus(session, "Ready", Theme.Success);
     }
 
     private void chkYolo_CheckedChanged(object? sender, EventArgs e)
     {
+        var session = ActiveSession;
+        if (session == null) return;
+
         bool isYolo = _chkYolo.Checked;
+        if (session.YoloMode == isYolo) return;
+
+        session.YoloMode = isYolo;
         UpdateYoloButtonStyle(isYolo);
 
         var settings = SettingsManager.Load();
         settings.YoloMode = isYolo;
         SettingsManager.Save(settings);
-        Log($"YOLO Mode: {(isYolo ? "ENABLED (Auto-approves all tool runs)" : "DISABLED (Requires user confirmations)")}");
+        Log($"YOLO Mode: {(isYolo ? "ENABLED (Auto-approves all tool runs)" : "DISABLED (Requires user confirmations)")}", session);
     }
 
     private void UpdateYoloButtonStyle(bool isYolo)
@@ -495,13 +529,14 @@ public partial class FormMain : Form
 
     private void btnCopyContext_Click(object? sender, EventArgs e)
     {
-        if (string.IsNullOrEmpty(_workspacePath))
+        var session = ActiveSession;
+        if (session == null)
         {
             MessageBox.Show("Please open a workspace folder first.", "Workspace Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        var checkedFiles = _workspaceController.GetCheckedFiles();
+        var checkedFiles = session.Controller.GetCheckedFiles();
         if (checkedFiles.Count == 0)
         {
             MessageBox.Show("Please select one or more files in the workspace explorer first.", "No Files Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -516,7 +551,7 @@ public partial class FormMain : Form
                 if (File.Exists(file))
                 {
                     string content = File.ReadAllText(file);
-                    string relPath = Path.GetRelativePath(_workspacePath, file);
+                    string relPath = Path.GetRelativePath(session.WorkspacePath, file);
                     sb.AppendLine($"// FILE: {relPath}");
                     sb.AppendLine("```");
                     sb.AppendLine(content);
@@ -534,21 +569,20 @@ public partial class FormMain : Form
         }
     }
 
-    private void WorkspaceController_FileSelected(object? sender, string path)
+    private void WorkspaceController_FileSelected(WorkspaceSession session, string path)
     {
         try
         {
             string text = File.ReadAllText(path);
-            _rtbCodeViewer.Text = text;
+            session.RtbCodeViewer.Text = text;
             _activeFilePath = path;
-            _lblViewerHeader.Text = $"📄 {Path.GetFileName(path)}";
+            session.LblViewerHeader.Text = $"📄 {Path.GetFileName(path)}";
 
-            var parentSplit = _pnlFileViewer.Parent as SplitContainer;
-            if (parentSplit != null && parentSplit.SplitterDistance >= parentSplit.Width - 100)
+            if (session.SplitContent.SplitterDistance >= session.SplitContent.Width - 100)
             {
-                parentSplit.SplitterDistance = (int)(parentSplit.Width * 0.6); // give 60% to Chat, 40% to code viewer
+                session.SplitContent.SplitterDistance = (int)(session.SplitContent.Width * 0.6); // give 60% to Chat, 40% to code viewer
             }
-            Log($"Opened file in viewer: {Path.GetFileName(path)}");
+            Log($"Opened file in viewer: {Path.GetFileName(path)}", session);
         }
         catch (Exception ex)
         {
@@ -558,17 +592,22 @@ public partial class FormMain : Form
 
     private void TvFiles_AfterCheck(object? sender, TreeViewEventArgs e)
     {
-        UpdateContextEstimation();
+        foreach (TabPage tab in _tabControl.TabPages)
+        {
+            if (tab.Tag is WorkspaceSession session && session.TvFiles == sender)
+            {
+                UpdateContextEstimation(session);
+                break;
+            }
+        }
     }
 
-    private void UpdateContextEstimation()
+    private void UpdateContextEstimation(WorkspaceSession session)
     {
-        if (string.IsNullOrEmpty(_workspacePath)) return;
-
         long totalFileChars = 0;
         try
         {
-            var checkedFiles = _workspaceController.GetCheckedFiles();
+            var checkedFiles = session.Controller.GetCheckedFiles();
             foreach (var file in checkedFiles)
             {
                 if (File.Exists(file))
@@ -579,13 +618,14 @@ public partial class FormMain : Form
         }
         catch { }
 
-        _ = ExecuteJsInChatAsync($"updateFileContextSize({totalFileChars});");
+        _ = ExecuteJsInChatAsync(session, $"updateFileContextSize({totalFileChars});");
     }
 
     private void btnOpenExplorer_Click(object? sender, EventArgs e)
     {
-        if (_tvFiles.SelectedNode == null || _tvFiles.SelectedNode.Tag == null) return;
-        string path = _tvFiles.SelectedNode.Tag.ToString() ?? "";
+        var session = ActiveSession;
+        if (session == null || session.TvFiles.SelectedNode == null || session.TvFiles.SelectedNode.Tag == null) return;
+        string path = session.TvFiles.SelectedNode.Tag.ToString() ?? "";
 
         try
         {
@@ -604,50 +644,83 @@ public partial class FormMain : Form
         }
     }
 
-    private void RefreshFileTreeOnMainThread()
+    private void btnCloseTab_Click(object? sender, EventArgs e)
     {
-        if (InvokeRequired)
+        var session = ActiveSession;
+        if (session == null) return;
+
+        var result = MessageBox.Show($"Are you sure you want to close the workspace '{Path.GetFileName(session.WorkspacePath)}'?", "Close Workspace", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (result == DialogResult.Yes)
         {
-            Invoke(new Action(_workspaceController.RefreshFileTree));
-        }
-        else
-        {
-            _workspaceController.RefreshFileTree();
+            session.Client?.Dispose();
+            session.WvChat?.Dispose();
+
+            _tabControl.TabPages.Remove(session.TabPage);
+
+            TabControl_SelectedIndexChanged(null, EventArgs.Empty);
         }
     }
 
-    private void Log(string message)
+    private void RefreshFileTreeOnMainThread(WorkspaceSession session)
     {
         if (InvokeRequired)
         {
-            Invoke(new Action<string>(Log), message);
+            Invoke(new Action(session.Controller.RefreshFileTree));
+        }
+        else
+        {
+            session.Controller.RefreshFileTree();
+        }
+    }
+
+    private void Log(string message, WorkspaceSession? session = null)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action<string, WorkspaceSession?>(Log), message, session);
             return;
         }
 
         if (string.IsNullOrEmpty(message)) return;
-        _rtbLogs.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
-        _rtbLogs.SelectionStart = _rtbLogs.Text.Length;
-        _rtbLogs.ScrollToCaret();
+
+        var targetSession = session ?? ActiveSession;
+        if (targetSession != null && targetSession.RtbLogs != null)
+        {
+            var rtb = targetSession.RtbLogs;
+            rtb.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+            rtb.SelectionStart = rtb.Text.Length;
+            rtb.ScrollToCaret();
+        }
+        else
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+        }
     }
 
-    private void SetStatus(string text, Color color)
+    private void SetStatus(WorkspaceSession session, string text, Color color)
     {
         if (InvokeRequired)
         {
-            Invoke(new Action<string, Color>(SetStatus), text, color);
+            Invoke(new Action<WorkspaceSession, string, Color>(SetStatus), session, text, color);
             return;
         }
-        _lblStatusText.Text = text;
-        _lblStatusText.ForeColor = color;
+        session.StatusText = text;
+        session.StatusColor = color;
+
+        if (session == ActiveSession)
+        {
+            _lblStatusText.Text = text;
+            _lblStatusText.ForeColor = color;
+        }
     }
 
-    private async Task ExecuteJsInChatAsync(string jsScript)
+    private async Task ExecuteJsInChatAsync(WorkspaceSession session, string jsScript)
     {
         try
         {
-            if (_wvChat.CoreWebView2 != null)
+            if (session.WvChat.CoreWebView2 != null)
             {
-                await _wvChat.CoreWebView2.ExecuteScriptAsync(jsScript);
+                await session.WvChat.CoreWebView2.ExecuteScriptAsync(jsScript);
             }
         }
         catch { }
@@ -655,7 +728,13 @@ public partial class FormMain : Form
 
     private void FormMain_FormClosed(object? sender, FormClosedEventArgs e)
     {
-        _openCodeClient?.Dispose();
+        foreach (TabPage tab in _tabControl.TabPages)
+        {
+            if (tab.Tag is WorkspaceSession session)
+            {
+                session.Client?.Dispose();
+            }
+        }
     }
 
     private static bool IsFreeModel(string modelTag)
