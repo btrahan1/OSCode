@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .app {
+      width: 100%;
+      max-width: 960px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    header h1 span { color: #4361ee; }
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .contact-count {
+      background: #e8ecf8;
+      color: #4361ee;
+      font-weight: 600;
+      font-size: 14px;
+      padding: 6px 14px;
+      border-radius: 20px;
+    }
+
+    /* Toolbar */
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .search-box {
+      flex: 1;
+      min-width: 200px;
+      padding: 10px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 15px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    .search-box:focus { border-color: #4361ee; }
+    .btn {
+      padding: 10px 22px;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary {
+      background: #4361ee;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #3651d4; }
+    .btn-secondary {
+      background: #e8ecf8;
+      color: #4361ee;
+    }
+    .btn-secondary:hover { background: #d6ddf5; }
+    .btn-danger {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+    .btn-danger:hover { background: #fecaca; }
+    .btn-success {
+      background: #dcfce7;
+      color: #16a34a;
+    }
+    .btn-success:hover { background: #bbf7d0; }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: #fff;
+      border-radius: 16px;
+      padding: 32px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    }
+    .modal h2 {
+      font-size: 22px;
+      margin-bottom: 20px;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #555;
+    }
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 10px 14px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    .form-group input:focus,
+    .form-group textarea:focus { border-color: #4361ee; }
+    .form-group textarea { resize: vertical; min-height: 60px; }
+    .form-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      justify-content: flex-end;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #888;
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-state p { font-size: 16px; }
+
+    /* Table */
+    .contacts-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .contact-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      transition: box-shadow 0.2s;
+      gap: 16px;
+    }
+    .contact-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .contact-info { flex: 1; min-width: 0; }
+    .contact-name {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .contact-details {
+      font-size: 14px;
+      color: #666;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 16px;
+    }
+    .contact-details span { white-space: nowrap; }
+    .contact-details .label { color: #999; }
+    .contact-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .contact-actions .btn {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    @media (max-width: 640px) {
+      body { padding: 20px 12px; }
+      header h1 { font-size: 22px; }
+      .contact-card { flex-direction: column; align-items: stretch; }
+      .contact-details { flex-direction: column; gap: 2px; }
+      .contact-actions { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Contacts<span>.</span></h1>
+      <div class="header-meta">
+        <span class="contact-count" id="contactCount">0 contacts</span>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <input type="text" class="search-box" id="searchBox" placeholder="Search contacts by name, email, or phone...">
+      <button class="btn btn-primary" id="addBtn">+ Add Contact</button>
+    </div>
+
+    <div id="contactsContainer">
+      <div class="contacts-grid" id="contactsList"></div>
+      <div class="empty-state" id="emptyState">
+        <div class="icon">📇</div>
+        <p>No contacts yet. Click "Add Contact" to get started.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h2 id="modalTitle">Add Contact</h2>
+      <form id="contactForm" autocomplete="off">
+        <div class="form-group">
+          <label for="name">Name *</label>
+          <input type="text" id="name" required>
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email">
+        </div>
+        <div class="form-group">
+          <label for="phone">Phone</label>
+          <input type="tel" id="phone">
+        </div>
+        <div class="form-group">
+          <label for="company">Company</label>
+          <input type="text" id="company">
+        </div>
+        <div class="form-group">
+          <label for="notes">Notes</label>
+          <textarea id="notes" rows="2"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="saveBtn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'contacts_app_data';
+
+    let contacts = [];
+    let editingId = null;
+
+    const $ = id => document.getElementById(id);
+    const contactsList = $('contactsList');
+    const emptyState = $('emptyState');
+    const contactCount = $('contactCount');
+    const searchBox = $('searchBox');
+    const modalOverlay = $('modalOverlay');
+    const modalTitle = $('modalTitle');
+    const contactForm = $('contactForm');
+    const nameInput = $('name');
+    const emailInput = $('email');
+    const phoneInput = $('phone');
+    const companyInput = $('company');
+    const notesInput = $('notes');
+    const saveBtn = $('saveBtn');
+
+    function loadContacts() {
+      try {
+        const data = localStorage.getItem(STORAGE_KEY);
+        contacts = data ? JSON.parse(data) : [];
+      } catch { contacts = []; }
+    }
+
+    function saveContacts() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+    }
+
+    function render() {
+      const query = searchBox.value.toLowerCase().trim();
+      const filtered = query
+        ? contacts.filter(c =>
+            c.name.toLowerCase().includes(query) ||
+            (c.email && c.email.toLowerCase().includes(query)) ||
+            (c.phone && c.phone.includes(query)) ||
+            (c.company && c.company.toLowerCase().includes(query))
+          )
+        : contacts;
+
+      contactCount.textContent = `${contacts.length} contact${contacts.length !== 1 ? 's' : ''}`;
+
+      if (filtered.length === 0) {
+        contactsList.innerHTML = '';
+        emptyState.style.display = 'block';
+        emptyState.querySelector('p').textContent =
+          query ? 'No contacts match your search.' : 'No contacts yet. Click "Add Contact" to get started.';
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      contactsList.innerHTML = filtered.map(c => `
+        <div class="contact-card" data-id="${c.id}">
+          <div class="contact-info">
+            <div class="contact-name">${esc(c.name)}</div>
+            <div class="contact-details">
+              ${c.email ? `<span>✉ ${esc(c.email)}</span>` : ''}
+              ${c.phone ? `<span>📞 ${esc(c.phone)}</span>` : ''}
+              ${c.company ? `<span>🏢 ${esc(c.company)}</span>` : ''}
+              ${c.notes ? `<span class="label">— ${esc(c.notes)}</span>` : ''}
+            </div>
+          </div>
+          <div class="contact-actions">
+            <button class="btn btn-secondary" onclick="editContact('${c.id}')">Edit</button>
+            <button class="btn btn-danger" onclick="deleteContact('${c.id}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function esc(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function generateId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+    function openModal(id = null) {
+      editingId = id;
+      modalTitle.textContent = id ? 'Edit Contact' : 'Add Contact';
+      saveBtn.textContent = id ? 'Update' : 'Save';
+      contactForm.reset();
+
+      if (id) {
+        const c = contacts.find(c => c.id === id);
+        if (c) {
+          nameInput.value = c.name;
+          emailInput.value = c.email || '';
+          phoneInput.value = c.phone || '';
+          companyInput.value = c.company || '';
+          notesInput.value = c.notes || '';
+        }
+      }
+
+      modalOverlay.classList.add('active');
+      nameInput.focus();
+    }
+
+    function closeModal() {
+      modalOverlay.classList.remove('active');
+      editingId = null;
+    }
+
+    function handleFormSubmit(e) {
+      e.preventDefault();
+
+      const name = nameInput.value.trim();
+      if (!name) return;
+
+      const data = {
+        name,
+        email: emailInput.value.trim(),
+        phone: phoneInput.value.trim(),
+        company: companyInput.value.trim(),
+        notes: notesInput.value.trim(),
+      };
+
+      if (editingId) {
+        const idx = contacts.findIndex(c => c.id === editingId);
+        if (idx !== -1) {
+          contacts[idx] = { ...contacts[idx], ...data };
+        }
+      } else {
+        contacts.push({ id: generateId(), ...data });
+      }
+
+      saveContacts();
+      render();
+      closeModal();
+    }
+
+    function deleteContact(id) {
+      if (!confirm('Delete this contact?')) return;
+      contacts = contacts.filter(c => c.id !== id);
+      saveContacts();
+      render();
+    }
+
+    function editContact(id) {
+      openModal(id);
+    }
+
+    // Event listeners
+    $('addBtn').addEventListener('click', () => openModal());
+    $('cancelBtn').addEventListener('click', closeModal);
+    modalOverlay.addEventListener('click', e => {
+      if (e.target === modalOverlay) closeModal();
+    });
+    contactForm.addEventListener('submit', handleFormSubmit);
+    searchBox.addEventListener('input', render);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Init
+    loadContacts();
+    render();
+  </script>
+</body>
+</html>

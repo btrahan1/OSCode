@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSCode Chat Workspace</title>
+    <style>
+        :root {
+            --bg: #f5f5f7;
+            --surface: #ffffff;
+            --border: #dcdce1;
+            --primary: #007aff;
+            --primary-hover: #0062d2;
+            --text-main: #1e1e1e;
+            --text-muted: #646469;
+            --bubble-user: #e1f0ff;
+            --bubble-assistant: #ffffff;
+            --think-bg: rgba(0, 122, 255, 0.03);
+            --widget-bg: #fff9e6;
+            --widget-border: #ffe0b2;
+            --widget-accent: #f57c00;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Message Container */
+        #chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            max-width: 85%;
+            display: flex;
+            flex-direction: column;
+            animation: fadeIn 0.25s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-self: flex-end;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+        }
+
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 14px;
+            word-break: break-word;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border);
+        }
+
+        .message.user .message-bubble {
+            background-color: var(--bubble-user);
+            color: var(--text-main);
+            border-bottom-right-radius: 2px;
+            border-color: #b2d7ff;
+        }
+
+        .message.assistant .message-bubble {
+            background-color: var(--bubble-assistant);
+            color: var(--text-main);
+            border-bottom-left-radius: 2px;
+        }
+
+        .message-sender {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .message.user .message-sender {
+            align-self: flex-end;
+        }
+
+        /* Thinking logs */
+        details.think-details {
+            background-color: var(--think-bg);
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin: 6px 0;
+            font-size: 13px;
+        }
+
+        details.think-details summary {
+            font-weight: bold;
+            color: var(--primary);
+            cursor: pointer;
+            outline: none;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        details.think-details summary::before {
+            content: "🧠";
+        }
+
+        .think-content {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-style: italic;
+            white-space: pre-wrap;
+            font-family: Consolas, Monaco, monospace;
+            border-left: 2px solid var(--primary);
+            padding-left: 8px;
+        }
+
+        /* Widgets (Permissions and Questions) */
+        .widget-box {
+            background-color: var(--widget-bg);
+            border: 1px solid var(--widget-border);
+            border-radius: 8px;
+            padding: 14px;
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 4px 8px rgba(245, 124, 0, 0.05);
+            animation: pulseWidget 1.5s infinite alternate;
+        }
+
+        @keyframes pulseWidget {
+            from { border-color: var(--widget-border); }
+            to { border-color: var(--widget-accent); }
+        }
+
+        .widget-title {
+            font-weight: bold;
+            color: var(--widget-accent);
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .widget-details {
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ffe8cc;
+            white-space: pre-wrap;
+            color: #333;
+        }
+
+        .widget-buttons {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            padding: 6px 16px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .btn-approve {
+            background-color: #34c759;
+            color: white;
+            border-color: #2ea84c;
+        }
+
+        .btn-approve:hover {
+            background-color: #2ea84c;
+        }
+
+        .btn-reject {
+            background-color: #ff3b30;
+            color: white;
+            border-color: #d82e25;
+        }
+
+        .btn-reject:hover {
+            background-color: #d82e25;
+        }
+
+        .btn-secondary {
+            background-color: var(--surface);
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--bg);
+        }
+
+        .widget-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            outline: none;
+            font-size: 13px;
+        }
+
+        /* Code highlight */
+        pre {
+            background-color: #1e1e24;
+            color: #f5f5f7;
+            padding: 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 8px 0;
+            font-size: 12.5px;
+            border: 1px solid var(--border);
+        }
+
+        code {
+            font-family: Consolas, Monaco, monospace;
+        }
+
+        /* Footer Input area */
+        footer {
+            background-color: var(--surface);
+            border-top: 1px solid var(--border);
+            padding: 12px 20px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        #input-box {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            outline: none;
+            font-size: 14px;
+            resize: none;
+            height: 42px;
+            line-height: 20px;
+            background-color: var(--bg);
+            color: var(--text-main);
+            transition: border-color 0.2s;
+        }
+
+        #input-box:focus {
+            border-color: var(--primary);
+            background-color: var(--surface);
+        }
+
+        #btn-send {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            width: 42px;
+            height: 42px;
+            border-radius: 8px;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+        }
+
+        #btn-send:hover {
+            background-color: var(--primary-hover);
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: none;
+            align-self: flex-start;
+            margin-left: 20px;
+            gap: 4px;
+            padding: 10px 14px;
+            background-color: var(--bubble-assistant);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            border-bottom-left-radius: 2px;
+        }
+
+        .dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--text-muted);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Context Window Tracker -->
+    <div id="context-gauge-container" style="background-color: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; flex-direction: column; gap: 6px; z-index: 100; shrink-0: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">
+            <span id="context-gauge-text">Context Usage: 0 / 32,768 tokens (0%)</span>
+        </div>
+        <div style="width: 100%; height: 6px; background-color: var(--bg); border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
+            <div id="context-gauge-fill" style="width: 0%; height: 100%; background-color: #34c759; border-radius: 3px; transition: width 0.3s ease-in-out, background-color 0.3s ease-in-out;"></div>
+        </div>
+    </div>
+
+    <!-- Chat Bubbles container -->
+    <div id="chat-container">
+        <!-- Initial Message -->
+        <div class="message assistant">
+            <div class="message-sender">OSCode Assistant</div>
+            <div class="message-bubble">
+                Welcome to OSCode. Select a workspace folder and an AI model from the sidebar to begin development.
+            </div>
+        </div>
+    </div>
+
+    <!-- Typing Indicator -->
+    <div class="typing-indicator" id="typing-indicator">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+    </div>
+
+    <!-- Input Box footer -->
+    <footer>
+        <textarea id="input-box" placeholder="Type a prompt to build, plan or refactor..."></textarea>
+        <button id="btn-send" onclick="handleSend()">➔</button>
+    </footer>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const inputBox = document.getElementById('input-box');
+        const typingIndicator = document.getElementById('typing-indicator');
+
+        // Manage Enter key to send message
+        inputBox.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+        });
+
+        let isGenerating = false;
+
+        function handleSend() {
+            if (isGenerating) {
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({
+                        type: 'cancel_prompt'
+                    });
+                }
+                return;
+            }
+
+            const text = inputBox.value.trim();
+            if (!text) return;
+
+            inputBox.value = '';
+            
+            // Add user bubble
+            addUserBubble(text);
+
+            setGenerating(true);
+
+            // Post to C# host
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'user_prompt',
+                    text: text
+                });
+            }
+        }
+
+        function setGenerating(generating) {
+            isGenerating = generating;
+            updateSendButton();
+        }
+
+        function updateSendButton() {
+            const btn = document.getElementById('btn-send');
+            if (btn) {
+                if (isGenerating) {
+                    btn.innerHTML = '⏹';
+                    btn.style.backgroundColor = '#ff3b30'; // Red
+                } else {
+                    btn.innerHTML = '➔';
+                    btn.style.backgroundColor = 'var(--primary)'; // Blue
+                }
+            }
+        }
+
+        function addUserBubble(text) {
+            const msg = document.createElement('div');
+            msg.className = 'message user';
+            msg.innerHTML = `
+                <div class="message-sender">You</div>
+                <div class="message-bubble">${escapeHtml(text)}</div>
+            `;
+            chatContainer.appendChild(msg);
+            scrollToBottom();
+            updateContextTracker();
+        }
+
+        // Active streaming message container reference
+        let activeAssistantMsg = null;
+        let activeAssistantBubble = null;
+        let activeThinkDetails = null;
+        let activeThinkContent = null;
+        let activeTextSpan = null;
+
+        function startAssistantResponse() {
+            showTyping(false);
+            
+            activeAssistantMsg = document.createElement('div');
+            activeAssistantMsg.className = 'message assistant';
+            activeAssistantMsg.innerHTML = `
+                <div class="message-sender">OSCode Assistant</div>
+                <div class="message-bubble" id="active-bubble"></div>
+            `;
+            chatContainer.appendChild(activeAssistantMsg);
+            
+            activeAssistantBubble = document.getElementById('active-bubble');
+            activeAssistantBubble.removeAttribute('id'); // release id
+            
+            activeThinkDetails = null;
+            activeThinkContent = null;
+            activeTextSpan = null;
+
+            scrollToBottom();
+        }
+
+        function appendReasoningChunk(chunk) {
+            if (!activeAssistantBubble) startAssistantResponse();
+
+            if (!activeThinkDetails) {
+                activeThinkDetails = document.createElement('details');
+                activeThinkDetails.className = 'think-details';
+                activeThinkDetails.open = true;
+                activeThinkDetails.innerHTML = `
+                    <summary>Thinking Process</summary>
+                    <div class="think-content"></div>
+                `;
+                activeAssistantBubble.appendChild(activeThinkDetails);
+                activeThinkContent = activeThinkDetails.querySelector('.think-content');
+            }
+
+            activeThinkContent.textContent += chunk;
+            scrollToBottom();
+        }
+
+        function appendTextChunk(chunk) {
+            if (!activeAssistantBubble) startAssistantResponse();
+
+            // Close thinking block if open
+            if (activeThinkDetails && activeThinkDetails.open) {
+                activeThinkDetails.open = false;
+            }
+
+            if (!activeTextSpan) {
+                activeTextSpan = document.createElement('span');
+                activeAssistantBubble.appendChild(activeTextSpan);
+            }
+
+            // Simple delta append (proper markdown rendering is done in finalize response)
+            activeTextSpan.textContent += chunk;
+            scrollToBottom();
+        }
+
+        function finalizeResponse(fullMarkdown) {
+            if (!activeAssistantBubble) return;
+            
+            // Render basic markdown formatting
+            let html = activeAssistantBubble.innerHTML;
+            if (activeTextSpan) {
+                const rawText = activeTextSpan.textContent;
+                const formattedHtml = parseMarkdown(rawText);
+                activeTextSpan.innerHTML = formattedHtml;
+            }
+
+            activeAssistantMsg = null;
+            activeAssistantBubble = null;
+            activeThinkDetails = null;
+            activeThinkContent = null;
+            activeTextSpan = null;
+
+            scrollToBottom();
+            updateContextTracker();
+            setGenerating(false);
+        }
+
+        function showTyping(visible) {
+            typingIndicator.style.display = visible ? 'flex' : 'none';
+            if (visible) scrollToBottom();
+        }
+
+        // Inline widgets creation
+        function addPermissionWidget(requestID, permissionName, details) {
+            // Find or create current assistant message to append the widget to
+            const widget = document.createElement('div');
+            widget.className = 'widget-box';
+            widget.id = `perm-${requestID}`;
+            widget.innerHTML = `
+                <div class="widget-title">🔒 PERMISSION REQUIRED: ${escapeHtml(permissionName)}</div>
+                <div class="widget-details">${escapeHtml(details)}</div>
+                <div class="widget-buttons">
+                    <button class="btn btn-secondary" onclick="sendPermissionReply('${requestID}', 'reject')">Deny</button>
+                    <button class="btn btn-approve" onclick="sendPermissionReply('${requestID}', 'once')">Approve Once</button>
+                    <button class="btn btn-approve" style="background-color: #007aff; border-color: #0062d2;" onclick="sendPermissionReply('${requestID}', 'always')">Always Approve</button>
+                </div>
+            `;
+
+            chatContainer.appendChild(widget);
+            scrollToBottom();
+        }
+
+        function sendPermissionReply(requestID, replyType) {
+            const widget = document.getElementById(`perm-${requestID}`);
+            if (widget) {
+                widget.style.opacity = '0.6';
+                widget.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            }
+
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'permission_reply',
+                    requestID: requestID,
+                    reply: replyType
+                });
+            }
+        }
+
+        function addQuestionWidget(requestID, questions) {
+            // Ensure questions is an array
+            if (!Array.isArray(questions)) {
+                questions = [questions];
+            }
+
+            const widget = document.createElement('div');
+            widget.className = 'widget-box';
+            widget.id = `que-${requestID}`;
+            
+            let html = `<div class="widget-title">❓ CLARIFICATION REQUIRED</div>`;
+            
+            questions.forEach((qText, index) => {
+                html += `
+                    <div style="font-size: 13.5px; margin-top: 8px; margin-bottom: 4px; font-weight: 600;">${escapeHtml(qText)}</div>
+                    <input type="text" class="widget-input question-input-${requestID}" placeholder="Type your answer here..." data-index="${index}" />
+                `;
+            });
+            
+            html += `
+                <div class="widget-buttons" style="margin-top: 10px;">
+                    <button class="btn btn-secondary" onclick="sendQuestionReject('${requestID}')">Cancel</button>
+                    <button class="btn btn-approve" onclick="sendQuestionReply('${requestID}')">Send Answer</button>
+                </div>
+            `;
+            
+            widget.innerHTML = html;
+            chatContainer.appendChild(widget);
+            scrollToBottom();
+
+            // Focus the first input
+            const firstInput = widget.querySelector(`.question-input-${requestID}`);
+            if (firstInput) firstInput.focus();
+
+            // Handle Enter key to send (or move focus to next input if there are multiple)
+            const inputs = widget.querySelectorAll(`.question-input-${requestID}`);
+            inputs.forEach((input, index) => {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        if (index < inputs.length - 1) {
+                            inputs[index + 1].focus();
+                        } else {
+                            sendQuestionReply(requestID);
+                        }
+                    }
+                });
+            });
+        }
+
+        function sendQuestionReply(requestID) {
+            const inputs = document.querySelectorAll(`.question-input-${requestID}`);
+            const answers = [];
+            let allAnswered = true;
+
+            inputs.forEach(input => {
+                const val = input.value.trim();
+                if (!val) {
+                    allAnswered = false;
+                    input.style.borderColor = '#ff3b30'; // highlight empty input in red
+                } else {
+                    input.style.borderColor = 'var(--border)';
+                }
+                answers.push(val);
+            });
+
+            if (!allAnswered) return; // require all questions to be answered
+
+            const widget = document.getElementById(`que-${requestID}`);
+            if (widget) {
+                widget.style.opacity = '0.6';
+                widget.querySelectorAll('button').forEach(btn => btn.disabled = true);
+                inputs.forEach(input => input.disabled = true);
+            }
+
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'question_reply',
+                    requestID: requestID,
+                    answers: answers
+                });
+            }
+        }
+
+        function sendQuestionReject(requestID) {
+            const widget = document.getElementById(`que-${requestID}`);
+            if (widget) {
+                widget.style.opacity = '0.6';
+                widget.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            }
+
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'question_reject',
+                    requestID: requestID
+                });
+            }
+        }
+
+        function clearChat() {
+            chatContainer.innerHTML = `
+                <div class="message assistant">
+                    <div class="message-sender">OSCode Assistant</div>
+                    <div class="message-bubble">
+                        Welcome to OSCode. Select a workspace folder and an AI model from the sidebar to begin development.
+                    </div>
+                </div>
+            `;
+            activeAssistantMsg = null;
+            activeAssistantBubble = null;
+            activeThinkDetails = null;
+            activeThinkContent = null;
+            activeTextSpan = null;
+            showTyping(false);
+            updateContextTracker();
+            setGenerating(false);
+        }
+
+        // Helper Utilities
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // --- CONTEXT WINDOW TRACKING ---
+        let fileContextTokens = 0;
+        let maxContextTokens = 32768;
+
+        function updateFileContextSize(charCount) {
+            fileContextTokens = Math.round(charCount / 4);
+            updateContextTracker();
+        }
+
+        function setMaxContextTokens(limit) {
+            maxContextTokens = limit;
+            updateContextTracker();
+        }
+
+        function updateContextTracker() {
+            const bubbles = document.querySelectorAll('.message-bubble');
+            let totalLength = 0;
+            bubbles.forEach(b => {
+                totalLength += b.textContent.length;
+            });
+
+            const chatTokens = Math.round(totalLength / 4);
+            const estimatedTokens = chatTokens + fileContextTokens;
+            const percent = Math.min(Math.round((estimatedTokens / maxContextTokens) * 100), 100);
+
+            const gaugeText = document.getElementById('context-gauge-text');
+            const gaugeFill = document.getElementById('context-gauge-fill');
+
+            if (gaugeText && gaugeFill) {
+                gaugeText.textContent = `Context Usage: ${estimatedTokens.toLocaleString()} / ${maxContextTokens.toLocaleString()} tokens (${percent}%)`;
+                gaugeFill.style.width = `${percent}%`;
+
+                // Color coding (green/orange/red)
+                if (percent < 50) {
+                    gaugeFill.style.backgroundColor = '#34c759'; // Green
+                } else if (percent < 80) {
+                    gaugeFill.style.backgroundColor = '#ff9500'; // Orange
+                } else {
+                    gaugeFill.style.backgroundColor = '#ff3b30'; // Red
+                }
+            }
+        }
+
+        // Initialize Context Tracker on startup
+        updateContextTracker();
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Minimal markdown-to-HTML formatter
+        function parseMarkdown(md) {
+            if (!md) return '';
+            let escaped = escapeHtml(md);
+            
+            // Format fenced code blocks
+            escaped = escaped.replace(/```([\s\S]*?)```/g, (match, p1) => {
+                return `<pre><code>${p1.trim()}</code></pre>`;
+            });
+
+            // Format inline code
+            escaped = escaped.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+            // Format strong / bold
+            escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+            // Format links
+            escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+            // Format line breaks
+            escaped = escaped.replace(/\n/g, '<br/>');
+
+            return escaped;
+        }
+    </script>
+</body>
+</html>
